@@ -1,0 +1,21 @@
+# Credenciais e segredos — NUNCA commitar
+.env
+credentials.json
+token.json
+sent_reminders.json
+
+# Ambiente virtual
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
