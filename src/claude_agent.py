@@ -5,7 +5,7 @@ from datetime import datetime
 import pytz
 import google.generativeai as genai
 from . import google_services as gs
-from .reminders import classify_event, reminder_summary
+from .reminders import classify_event, reminder_summary, format_minutes
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
@@ -28,12 +28,21 @@ def _execute_tool(name: str, inputs: dict) -> str:
             return json.dumps(gs.list_events(inputs.get("dias", 7), inputs.get("quantidade", 20)), ensure_ascii=False)
         elif name == "criar_evento":
             rule = classify_event(inputs["titulo"], inputs.get("descricao", ""))
+            minutes = list(rule.minutes_before)
+            for h in inputs.get("lembretes_extras_horas", []):
+                if h in (1, 2, 3):
+                    m = h * 60
+                    if m not in minutes:
+                        minutes.append(m)
             link, _ = gs.create_event(
                 inputs["titulo"], inputs["inicio"], inputs["fim"],
                 inputs.get("descricao", ""), inputs.get("local", ""),
-                reminder_minutes=rule.minutes_before,
+                reminder_minutes=minutes,
             )
-            return f"Evento criado: {link}\n⏰ Lembretes: {reminder_summary(rule)}"
+            lembrete_info = " + ".join(
+                format_minutes(m) for m in sorted(minutes, reverse=True)
+            )
+            return f"Evento criado: {link}\n⏰ Lembretes: {lembrete_info}"
         elif name == "deletar_evento":
             gs.delete_event(inputs["id"])
             return "Evento removido."
@@ -74,8 +83,8 @@ Ferramentas disponíveis:
 - listar_eventos: lista próximos eventos do Calendar
   args: {{"dias": 7, "quantidade": 20}}
 
-- criar_evento: cria evento com lembretes automáticos por tipo
-  args: {{"titulo": "texto", "inicio": "2024-06-20T14:00:00", "fim": "2024-06-20T15:00:00", "descricao": "", "local": ""}}
+- criar_evento: cria evento com lembretes automáticos por tipo. O usuário pode pedir lembretes extras de 1h, 2h ou 3h antes — use o campo "lembretes_extras_horas" para isso (lista de inteiros, ex: [1, 2]).
+  args: {{"titulo": "texto", "inicio": "2024-06-20T14:00:00", "fim": "2024-06-20T15:00:00", "descricao": "", "local": "", "lembretes_extras_horas": []}}
 
 - deletar_evento: remove evento pelo ID
   args: {{"id": "id_do_evento"}}
