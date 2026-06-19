@@ -46,7 +46,7 @@ def _is_allowed(user_id: int) -> bool:
 async def _transcribe_voice(file_path: str) -> str:
     """Transcreve áudio usando Gemini."""
     import google.generativeai as genai
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-2.5-flash")
     with open(file_path, "rb") as f:
         audio_data = f.read()
     response = model.generate_content([

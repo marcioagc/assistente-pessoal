@@ -105,7 +105,7 @@ def _extract_tool_call(text: str):
 
 def chat(conversation_history: list, user_message: str) -> str:
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.5-flash",
         system_instruction=_system_prompt(),
     )
 
@@ -163,7 +163,7 @@ def generate_daily_briefing() -> str:
     )
 
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.5-flash",
         system_instruction=_system_prompt(),
     )
     response = model.generate_content(prompt)
