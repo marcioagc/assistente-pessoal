@@ -51,6 +51,28 @@ def _execute_tool(name: str, inputs: dict) -> str:
             if not contacts:
                 return f"Nenhum contato encontrado para '{inputs['nome']}'."
             return json.dumps(contacts, ensure_ascii=False)
+        elif name == "listar_labels":
+            return json.dumps(gs.list_labels(), ensure_ascii=False)
+        elif name == "listar_filtros":
+            filters = gs.list_filters()
+            if not filters:
+                return "Nenhum filtro configurado ainda."
+            return json.dumps(filters, ensure_ascii=False)
+        elif name == "criar_filtro":
+            fid = gs.create_filter(
+                label_name=inputs["label"],
+                from_=inputs.get("de", ""),
+                to_=inputs.get("para", ""),
+                subject=inputs.get("assunto", ""),
+                query=inputs.get("query", ""),
+            )
+            return f"Filtro criado com sucesso. ID: {fid}"
+        elif name == "deletar_filtro":
+            gs.delete_filter(inputs["id"])
+            return "Filtro removido."
+        elif name == "aplicar_label":
+            gs.apply_label_to_message(inputs["id_email"], inputs["label"])
+            return f"Label '{inputs['label']}' aplicado e email removido da caixa de entrada."
         else:
             return f"Ferramenta desconhecida: {name}"
     except Exception as e:
@@ -96,6 +118,21 @@ Ferramentas disponíveis:
 
 - buscar_contato: busca email/telefone de um contato pelo nome nos contatos Google do usuário. Use SEMPRE que o usuário mencionar uma pessoa pelo nome ou apelido ("minha mãe", "João", "cliente X") antes de enviar email.
   args: {{"nome": "nome da pessoa", "quantidade": 5}}
+
+- listar_labels: lista todos os labels/pastas do Gmail do usuário com seus IDs.
+  args: {{}}
+
+- listar_filtros: lista os filtros automáticos configurados no Gmail.
+  args: {{}}
+
+- criar_filtro: cria um filtro no Gmail que aplica um label e remove da caixa de entrada automaticamente. Ao menos um critério obrigatório.
+  args: {{"label": "nome do label", "de": "remetente@email.com ou @dominio.com", "para": "", "assunto": "texto no assunto", "query": "query avançada Gmail"}}
+
+- deletar_filtro: remove um filtro automático pelo ID.
+  args: {{"id": "id_do_filtro"}}
+
+- aplicar_label: aplica um label manualmente a um email existente e o remove da caixa de entrada.
+  args: {{"id_email": "id do email", "label": "nome do label"}}
 
 Regras:
 - Para listar emails ou eventos, SEMPRE chame a ferramenta correspondente — nunca invente dados

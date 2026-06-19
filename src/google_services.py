@@ -220,6 +220,119 @@ def delete_event(event_id: str):
     service.events().delete(calendarId="primary", eventId=event_id).execute()
 
 
+# ── Labels & Filtros ───────────────────────────────────────────────────────────
+
+LABEL_MAP: dict[str, str] = {}  # cache nome→id
+
+
+def _get_label_map() -> dict[str, str]:
+    global LABEL_MAP
+    if not LABEL_MAP:
+        service = get_gmail_service()
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        LABEL_MAP = {l["name"]: l["id"] for l in labels}
+    return LABEL_MAP
+
+
+def list_labels() -> list[dict]:
+    service = get_gmail_service()
+    labels = service.users().labels().list(userId="me").execute().get("labels", [])
+    return [{"id": l["id"], "name": l["name"], "type": l["type"]} for l in labels]
+
+
+def create_label(name: str) -> str:
+    service = get_gmail_service()
+    label = service.users().labels().create(userId="me", body={"name": name}).execute()
+    LABEL_MAP[name] = label["id"]
+    return label["id"]
+
+
+def get_label_id(name: str) -> str | None:
+    lmap = _get_label_map()
+    # Busca exata primeiro, depois case-insensitive
+    if name in lmap:
+        return lmap[name]
+    name_lower = name.lower()
+    for k, v in lmap.items():
+        if k.lower() == name_lower:
+            return v
+    return None
+
+
+def list_filters() -> list[dict]:
+    service = get_gmail_service()
+    result = service.users().settings().filters().list(userId="me").execute()
+    filters = result.get("filter", [])
+    lmap = {v: k for k, v in _get_label_map().items()}  # id→nome
+    out = []
+    for f in filters:
+        criteria = f.get("criteria", {})
+        action = f.get("action", {})
+        add_labels = [lmap.get(lid, lid) for lid in action.get("addLabelIds", [])]
+        remove_inbox = "INBOX" in action.get("removeLabelIds", [])
+        out.append({
+            "id": f["id"],
+            "de": criteria.get("from", ""),
+            "para": criteria.get("to", ""),
+            "assunto": criteria.get("subject", ""),
+            "query": criteria.get("query", ""),
+            "labels": add_labels,
+            "remove_inbox": remove_inbox,
+        })
+    return out
+
+
+def create_filter(label_name: str, from_: str = "", to_: str = "",
+                  subject: str = "", query: str = "") -> str:
+    """Cria filtro Gmail que aplica label e remove da caixa de entrada."""
+    service = get_gmail_service()
+
+    # Resolve ou cria o label
+    label_id = get_label_id(label_name)
+    if not label_id:
+        label_id = create_label(label_name)
+
+    criteria: dict = {}
+    if from_:
+        criteria["from"] = from_
+    if to_:
+        criteria["to"] = to_
+    if subject:
+        criteria["subject"] = subject
+    if query:
+        criteria["query"] = query
+
+    if not criteria:
+        raise ValueError("Pelo menos um critério de filtro é obrigatório (de, para, assunto ou query).")
+
+    body = {
+        "criteria": criteria,
+        "action": {
+            "addLabelIds": [label_id],
+            "removeLabelIds": ["INBOX"],
+        },
+    }
+    result = service.users().settings().filters().create(userId="me", body=body).execute()
+    return result["id"]
+
+
+def delete_filter(filter_id: str):
+    service = get_gmail_service()
+    service.users().settings().filters().delete(userId="me", id=filter_id).execute()
+
+
+def apply_label_to_message(message_id: str, label_name: str, remove_inbox: bool = True):
+    """Aplica label manualmente a um email existente."""
+    service = get_gmail_service()
+    label_id = get_label_id(label_name)
+    if not label_id:
+        label_id = create_label(label_name)
+    body: dict = {"addLabelIds": [label_id]}
+    if remove_inbox:
+        body["removeLabelIds"] = ["INBOX"]
+    service.users().messages().modify(userId="me", id=message_id, body=body).execute()
+
+
 # ── Contatos ───────────────────────────────────────────────────────────────────
 
 def get_people_service():
