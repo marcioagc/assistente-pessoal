@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 import pytz
 import google.generativeai as genai
@@ -8,116 +9,15 @@ from .reminders import classify_event, reminder_summary
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-TOOLS_DECLARATION = [
-    {
-        "name": "listar_emails_nao_lidos",
-        "description": "Lista os emails não lidos da caixa de entrada do usuário.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "quantidade": {"type": "integer", "description": "Número máximo de emails a retornar (padrão: 10)"}
-            },
-        },
-    },
-    {
-        "name": "ler_email",
-        "description": "Lê o conteúdo completo de um email específico pelo seu ID.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "description": "ID do email"}
-            },
-            "required": ["id"],
-        },
-    },
-    {
-        "name": "buscar_emails",
-        "description": "Busca emails por palavra-chave, remetente, assunto, data etc.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "Termo de busca Gmail (ex: 'from:joao@email.com', 'subject:reunião')"},
-                "quantidade": {"type": "integer", "description": "Número máximo de resultados (padrão: 5)"},
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "criar_rascunho",
-        "description": "Cria um rascunho de email no Gmail.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "para": {"type": "string", "description": "Endereço de email do destinatário"},
-                "assunto": {"type": "string", "description": "Assunto do email"},
-                "corpo": {"type": "string", "description": "Corpo do email"},
-            },
-            "required": ["para", "assunto", "corpo"],
-        },
-    },
-    {
-        "name": "enviar_email",
-        "description": "Envia um email. Use somente quando o usuário confirmar explicitamente.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "para": {"type": "string", "description": "Endereço de email do destinatário"},
-                "assunto": {"type": "string", "description": "Assunto do email"},
-                "corpo": {"type": "string", "description": "Corpo do email"},
-            },
-            "required": ["para", "assunto", "corpo"],
-        },
-    },
-    {
-        "name": "listar_eventos",
-        "description": "Lista os próximos eventos do Google Calendar.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "dias": {"type": "integer", "description": "Quantos dias à frente verificar (padrão: 7)"},
-                "quantidade": {"type": "integer", "description": "Número máximo de eventos (padrão: 20)"},
-            },
-        },
-    },
-    {
-        "name": "criar_evento",
-        "description": "Cria um novo evento no Google Calendar com lembretes automáticos.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "titulo": {"type": "string", "description": "Título do evento"},
-                "inicio": {"type": "string", "description": "Data/hora de início ISO 8601 (ex: 2024-06-20T14:00:00)"},
-                "fim": {"type": "string", "description": "Data/hora de fim ISO 8601"},
-                "descricao": {"type": "string", "description": "Descrição ou notas do evento"},
-                "local": {"type": "string", "description": "Local do evento"},
-            },
-            "required": ["titulo", "inicio", "fim"],
-        },
-    },
-    {
-        "name": "deletar_evento",
-        "description": "Remove um evento do Google Calendar pelo ID.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {"type": "string", "description": "ID do evento"}
-            },
-            "required": ["id"],
-        },
-    },
-]
-
 
 def _execute_tool(name: str, inputs: dict) -> str:
     try:
         if name == "listar_emails_nao_lidos":
-            emails = gs.list_unread_emails(inputs.get("quantidade", 10))
-            return json.dumps(emails, ensure_ascii=False)
+            return json.dumps(gs.list_unread_emails(inputs.get("quantidade", 10)), ensure_ascii=False)
         elif name == "ler_email":
             return json.dumps(gs.get_email_body(inputs["id"]), ensure_ascii=False)
         elif name == "buscar_emails":
-            emails = gs.search_emails(inputs["query"], inputs.get("quantidade", 5))
-            return json.dumps(emails, ensure_ascii=False)
+            return json.dumps(gs.search_emails(inputs["query"], inputs.get("quantidade", 5)), ensure_ascii=False)
         elif name == "criar_rascunho":
             draft_id = gs.create_draft(inputs["para"], inputs["assunto"], inputs["corpo"])
             return f"Rascunho criado. ID: {draft_id}"
@@ -125,8 +25,7 @@ def _execute_tool(name: str, inputs: dict) -> str:
             gs.send_email(inputs["para"], inputs["assunto"], inputs["corpo"])
             return "Email enviado com sucesso."
         elif name == "listar_eventos":
-            events = gs.list_events(inputs.get("dias", 7), inputs.get("quantidade", 20))
-            return json.dumps(events, ensure_ascii=False)
+            return json.dumps(gs.list_events(inputs.get("dias", 7), inputs.get("quantidade", 20)), ensure_ascii=False)
         elif name == "criar_evento":
             rule = classify_event(inputs["titulo"], inputs.get("descricao", ""))
             link, _ = gs.create_event(
@@ -147,78 +46,106 @@ def _execute_tool(name: str, inputs: dict) -> str:
 def _system_prompt():
     tz = pytz.timezone(os.getenv("TIMEZONE", "America/Sao_Paulo"))
     now = datetime.now(tz).strftime("%A, %d/%m/%Y %H:%M")
-    return (
-        f"Você é um assistente pessoal inteligente e proativo.\n"
-        f"Data/hora atual: {now} (fuso: {tz.zone})\n\n"
-        "Você gerencia email (Gmail) e agenda (Google Calendar) do usuário.\n"
-        "Responda sempre em português brasileiro, de forma clara e objetiva.\n\n"
-        "Diretrizes:\n"
-        "- Apresente listas de emails/eventos de forma organizada e legível\n"
-        "- Para ENVIAR emails, sempre peça confirmação antes. Pode criar rascunhos sem confirmar.\n"
-        "- Ao criar eventos, confirme detalhes ambíguos com o usuário\n"
-        "- Para datas relativas ('amanhã', 'semana que vem'), calcule com base na data atual\n"
-        "- Use emojis para organizar: 📧 email, 📅 agenda, ✅ concluído, ⚠️ atenção"
-    )
+    return f"""Você é um assistente pessoal inteligente que gerencia Gmail e Google Calendar.
+Data/hora atual: {now} (fuso: America/Sao_Paulo)
+Responda SEMPRE em português brasileiro.
+
+Você tem acesso às seguintes ferramentas. Quando precisar usá-las, responda SOMENTE com um bloco JSON no formato abaixo (sem texto antes ou depois):
+
+{{"tool": "nome_da_ferramenta", "args": {{...}}}}
+
+Ferramentas disponíveis:
+
+- listar_emails_nao_lidos: lista emails não lidos
+  args: {{"quantidade": 10}}
+
+- ler_email: lê um email completo pelo ID
+  args: {{"id": "id_do_email"}}
+
+- buscar_emails: busca emails por query Gmail
+  args: {{"query": "from:alguem@email.com", "quantidade": 5}}
+
+- criar_rascunho: cria rascunho no Gmail (NÃO envia)
+  args: {{"para": "email", "assunto": "texto", "corpo": "texto"}}
+
+- enviar_email: envia email (só com confirmação explícita do usuário)
+  args: {{"para": "email", "assunto": "texto", "corpo": "texto"}}
+
+- listar_eventos: lista próximos eventos do Calendar
+  args: {{"dias": 7, "quantidade": 20}}
+
+- criar_evento: cria evento com lembretes automáticos por tipo
+  args: {{"titulo": "texto", "inicio": "2024-06-20T14:00:00", "fim": "2024-06-20T15:00:00", "descricao": "", "local": ""}}
+
+- deletar_evento: remove evento pelo ID
+  args: {{"id": "id_do_evento"}}
+
+Regras:
+- Para listar emails ou eventos, SEMPRE chame a ferramenta correspondente — nunca invente dados
+- Para enviar email, peça confirmação antes; para rascunho, pode criar direto
+- Use emojis: 📧 email, 📅 agenda, ✅ concluído, ⚠️ atenção
+- Datas relativas ("amanhã", "semana que vem") calcule a partir da data atual acima
+- Quando receber resultado de ferramenta, responda de forma clara e organizada em texto normal"""
 
 
-def _get_model():
-    return genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=_system_prompt(),
-        tools=TOOLS_DECLARATION,
-    )
+def _extract_tool_call(text: str):
+    """Extrai chamada de ferramenta do texto do modelo, se houver."""
+    text = text.strip()
+    # Tenta encontrar JSON puro
+    match = re.search(r'\{[^{}]*"tool"[^{}]*\}', text, re.DOTALL)
+    if match:
+        try:
+            data = json.loads(match.group())
+            if "tool" in data and "args" in data:
+                return data["tool"], data["args"]
+        except json.JSONDecodeError:
+            pass
+    return None, None
 
 
 def chat(conversation_history: list, user_message: str) -> str:
-    model = _get_model()
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=_system_prompt(),
+    )
 
-    # Reconstrói o histórico no formato Gemini
+    # Reconstrói histórico no formato Gemini
     history = []
     for msg in conversation_history:
         role = "user" if msg["role"] == "user" else "model"
-        history.append({"role": role, "parts": [msg["content"]]})
+        history.append({"role": role, "parts": [{"text": msg["content"]}]})
 
     chat_session = model.start_chat(history=history)
     response = chat_session.send_message(user_message)
+    reply_text = response.text
 
-    # Processa chamadas de ferramenta
-    max_rounds = 5
-    for _ in range(max_rounds):
-        fn_calls = [p for p in response.parts if hasattr(p, "function_call") and p.function_call.name]
-        if not fn_calls:
+    # Loop de tool calling (até 5 rodadas)
+    for _ in range(5):
+        tool_name, tool_args = _extract_tool_call(reply_text)
+        if not tool_name:
             break
 
-        tool_responses = []
-        for part in fn_calls:
-            fc = part.function_call
-            args = dict(fc.args)
-            result = _execute_tool(fc.name, args)
-            tool_responses.append(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=fc.name,
-                        response={"result": result},
-                    )
-                )
-            )
+        tool_result = _execute_tool(tool_name, tool_args)
 
-        response = chat_session.send_message(tool_responses)
+        # Devolve resultado ao modelo
+        follow_up = f"[Resultado da ferramenta {tool_name}]:\n{tool_result}"
+        response = chat_session.send_message(follow_up)
+        reply_text = response.text
 
-    text = "".join(p.text for p in response.parts if hasattr(p, "text"))
-
-    # Atualiza histórico
     conversation_history.append({"role": "user", "content": user_message})
-    conversation_history.append({"role": "assistant", "content": text})
-
-    return text
+    conversation_history.append({"role": "assistant", "content": reply_text})
+    return reply_text
 
 
 def generate_daily_briefing() -> str:
     tz = pytz.timezone(os.getenv("TIMEZONE", "America/Sao_Paulo"))
     today = datetime.now(tz).strftime("%A, %d/%m/%Y")
 
-    emails = gs.list_unread_emails(max_results=15)
-    events = gs.list_events(days_ahead=1, max_results=10)
+    try:
+        emails = gs.list_unread_emails(max_results=15)
+        events = gs.list_events(days_ahead=1, max_results=10)
+    except Exception as e:
+        return f"❌ Erro ao buscar dados para o briefing: {e}"
 
     prompt = (
         f"Gere um briefing matinal para hoje ({today}).\n\n"
