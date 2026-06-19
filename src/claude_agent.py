@@ -46,6 +46,11 @@ def _execute_tool(name: str, inputs: dict) -> str:
         elif name == "deletar_evento":
             gs.delete_event(inputs["id"])
             return "Evento removido."
+        elif name == "buscar_contato":
+            contacts = gs.search_contacts(inputs["nome"], inputs.get("quantidade", 5))
+            if not contacts:
+                return f"Nenhum contato encontrado para '{inputs['nome']}'."
+            return json.dumps(contacts, ensure_ascii=False)
         else:
             return f"Ferramenta desconhecida: {name}"
     except Exception as e:
@@ -88,6 +93,9 @@ Ferramentas disponíveis:
 
 - deletar_evento: remove evento pelo ID
   args: {{"id": "id_do_evento"}}
+
+- buscar_contato: busca email/telefone de um contato pelo nome nos contatos Google do usuário. Use SEMPRE que o usuário mencionar uma pessoa pelo nome ou apelido ("minha mãe", "João", "cliente X") antes de enviar email.
+  args: {{"nome": "nome da pessoa", "quantidade": 5}}
 
 Regras:
 - Para listar emails ou eventos, SEMPRE chame a ferramenta correspondente — nunca invente dados

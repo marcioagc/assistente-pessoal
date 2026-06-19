@@ -27,6 +27,23 @@ logger = logging.getLogger(__name__)
 conversations: dict[int, list] = {}
 ALLOWED_USER_ID = int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0"))
 SENT_REMINDERS_FILE = Path(__file__).parent.parent / "sent_reminders.json"
+USER_LOCATION_FILE = Path(__file__).parent.parent / "user_location.json"
+
+# Localização mais recente do usuário {lat, lng, updated_at}
+_last_location: dict = {}
+
+
+def _load_location():
+    global _last_location
+    if USER_LOCATION_FILE.exists():
+        _last_location = json.loads(USER_LOCATION_FILE.read_text())
+
+
+def _save_location(lat: float, lng: float):
+    global _last_location
+    from datetime import timezone
+    _last_location = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
+    USER_LOCATION_FILE.write_text(json.dumps(_last_location))
 
 
 def _load_sent_reminders() -> set:
@@ -130,6 +147,17 @@ async def cmd_ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Salva localização compartilhada pelo usuário (pontual ou ao vivo)."""
+    if not _is_allowed(update.effective_user.id):
+        return
+    loc = update.message.location
+    _save_location(loc.latitude, loc.longitude)
+    await update.message.reply_text(
+        "📍 Localização recebida! Vou usá-la para calcular o tempo de deslocamento nos próximos lembretes."
+    )
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_allowed(update.effective_user.id):
         await update.message.reply_text("Acesso não autorizado.")
@@ -223,10 +251,29 @@ async def check_reminders(app: Application):
                 f"📌 *{event['summary']}*\n"
                 f"🕐 {start_fmt}"
             )
-            if event.get("location"):
-                msg += f"\n📍 {event['location']}"
+            location = event.get("location", "")
+            if location:
+                msg += f"\n📍 {location}"
+                # Tempo de deslocamento com localização do usuário
+                if _last_location.get("lat"):
+                    travel = gs.get_travel_time_from_coords(
+                        location, _last_location["lat"], _last_location["lng"]
+                    )
+                    route = gs.directions_link_from_coords(
+                        location, _last_location["lat"], _last_location["lng"]
+                    )
+                    if travel:
+                        msg += f"\n🚗 *{travel} de onde você está*"
+                    msg += f"\n🧭 [Como chegar]({route})"
+                else:
+                    # Sem localização salva — link genérico (Maps usa GPS do celular)
+                    route = gs.directions_link(location)
+                    msg += f"\n🧭 [Como chegar]({route})"
             if event.get("description"):
-                msg += f"\n📝 {event['description'][:200]}"
+                # Não repete o bloco de Maps que já está na descrição
+                desc = event["description"].split("📍 Local:")[0].strip()
+                if desc:
+                    msg += f"\n📝 {desc[:200]}"
 
             try:
                 await app.bot.send_message(chat_id=allowed_id, text=msg, parse_mode="Markdown")
@@ -260,12 +307,15 @@ def run():
 
     app = Application.builder().token(token).build()
 
+    _load_location()
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("briefing", cmd_briefing))
     app.add_handler(CommandHandler("limpar", cmd_limpar))
     app.add_handler(CommandHandler("ajuda", cmd_ajuda))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    app.add_handler(MessageHandler(filters.LOCATION, handle_location))
 
     tz = pytz.timezone(os.getenv("TIMEZONE", "America/Sao_Paulo"))
     hour = int(os.getenv("BRIEFING_HOUR", "8"))

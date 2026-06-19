@@ -1,5 +1,7 @@
 import os
 import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -17,6 +19,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/contacts.readonly",
 ]
 
 TOKEN_FILE = Path(__file__).parent.parent / "token.json"
@@ -195,6 +198,11 @@ def create_event(summary: str, start_dt: str, end_dt: str, description: str = ""
     else:
         reminders = {"useDefault": True}
 
+    # Adiciona bloco de Maps na descrição quando há local
+    if location:
+        maps_block = build_location_description(location)
+        description = f"{description}\n\n{maps_block}".strip() if description else maps_block
+
     event = {
         "summary": summary,
         "location": location,
@@ -210,3 +218,119 @@ def create_event(summary: str, start_dt: str, end_dt: str, description: str = ""
 def delete_event(event_id: str):
     service = get_calendar_service()
     service.events().delete(calendarId="primary", eventId=event_id).execute()
+
+
+# ── Contatos ───────────────────────────────────────────────────────────────────
+
+def get_people_service():
+    return build("people", "v1", credentials=get_credentials())
+
+
+def search_contacts(name: str, max_results=5) -> list[dict]:
+    service = get_people_service()
+    result = service.people().searchContacts(
+        query=name,
+        readMask="names,emailAddresses,phoneNumbers",
+        pageSize=max_results,
+    ).execute()
+    contacts = []
+    for r in result.get("results", []):
+        person = r.get("person", {})
+        names = person.get("names", [{}])
+        emails = person.get("emailAddresses", [])
+        phones = person.get("phoneNumbers", [])
+        contacts.append({
+            "nome": names[0].get("displayName", "") if names else "",
+            "emails": [e["value"] for e in emails],
+            "telefones": [p["value"] for p in phones],
+        })
+    return contacts
+
+
+# ── Maps / Directions ──────────────────────────────────────────────────────────
+
+def maps_link(location: str) -> str:
+    """Retorna link do Google Maps para o endereço."""
+    encoded = urllib.parse.quote(location)
+    return f"https://www.google.com/maps/search/?api=1&query={encoded}"
+
+
+def directions_link(destination: str, origin: str = "") -> str:
+    """Retorna link de rota no Google Maps."""
+    dest_enc = urllib.parse.quote(destination)
+    if origin:
+        orig_enc = urllib.parse.quote(origin)
+        return f"https://www.google.com/maps/dir/?api=1&origin={orig_enc}&destination={dest_enc}"
+    return f"https://www.google.com/maps/dir/?api=1&destination={dest_enc}"
+
+
+def get_travel_time(destination: str, origin: str = "") -> str | None:
+    """Usa Directions API para estimar tempo de deslocamento."""
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    if not api_key or not origin:
+        return None
+    try:
+        params = urllib.parse.urlencode({
+            "origin": origin,
+            "destination": destination,
+            "key": api_key,
+            "language": "pt-BR",
+            "mode": "driving",
+        })
+        url = f"https://maps.googleapis.com/maps/api/directions/json?{params}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == "OK":
+            leg = data["routes"][0]["legs"][0]
+            return leg["duration"]["text"]
+    except Exception:
+        pass
+    return None
+
+
+def build_location_description(location: str) -> str:
+    """Monta bloco de localização para incluir na descrição do evento.
+    Não usa origem fixa — o Maps usa a localização atual do dispositivo ao abrir."""
+    if not location:
+        return ""
+    # Sem origin → Google Maps usa GPS do celular automaticamente
+    route = directions_link(location)
+    maps = maps_link(location)
+    lines = [
+        f"📍 Local: {location}",
+        f"🗺️ Ver no Maps: {maps}",
+        f"🧭 Como chegar (usa sua localização atual): {route}",
+    ]
+    return "\n".join(lines)
+
+
+def get_travel_time_from_coords(destination: str, lat: float, lng: float) -> str | None:
+    """Calcula tempo de deslocamento a partir de coordenadas GPS do usuário."""
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        return None
+    try:
+        origin = f"{lat},{lng}"
+        params = urllib.parse.urlencode({
+            "origin": origin,
+            "destination": destination,
+            "key": api_key,
+            "language": "pt-BR",
+            "mode": "driving",
+        })
+        url = f"https://maps.googleapis.com/maps/api/directions/json?{params}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == "OK":
+            leg = data["routes"][0]["legs"][0]
+            duration = leg["duration"]["text"]
+            distance = leg["distance"]["text"]
+            return f"{duration} ({distance})"
+    except Exception:
+        pass
+    return None
+
+
+def directions_link_from_coords(destination: str, lat: float, lng: float) -> str:
+    dest_enc = urllib.parse.quote(destination)
+    return f"https://www.google.com/maps/dir/?api=1&origin={lat},{lng}&destination={dest_enc}"
