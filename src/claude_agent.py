@@ -91,15 +91,25 @@ Regras:
 def _extract_tool_call(text: str):
     """Extrai chamada de ferramenta do texto do modelo, se houver."""
     text = text.strip()
-    # Tenta encontrar JSON puro
-    match = re.search(r'\{[^{}]*"tool"[^{}]*\}', text, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            if "tool" in data and "args" in data:
-                return data["tool"], data["args"]
-        except json.JSONDecodeError:
-            pass
+    # Encontra o primeiro '{' e tenta decodificar JSON com profundidade arbitrária
+    start = text.find('{')
+    if start == -1:
+        return None, None
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:i+1]
+                try:
+                    data = json.loads(candidate)
+                    if "tool" in data and "args" in data:
+                        return data["tool"], data["args"]
+                except json.JSONDecodeError:
+                    pass
+                break
     return None, None
 
 
